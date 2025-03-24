@@ -7,25 +7,23 @@ import re
 from collections import defaultdict
 import requests
 import random
-
+import sys
 # pip install opencc-python-reimplemented
 from opencc import OpenCC 
 
-GOOGLE_API_KEY=''
-
-if not GOOGLE_API_KEY:
-    GOOGLE_API_KEY = input("Enter your Google API Key for Gemini translations:\n").strip()
-    if not GOOGLE_API_KEY:
-        raise ValueError("Don't forget to set your GOOGLE_API_KEY in Google AI Studio (https://makersuite.google.com) for Gemini translations!")
+# Global configuration variables
+GOOGLE_API_KEY = ''
+APPCATEGORY = ""
+LANGUAGE_IDENTIFIERS = ['en', 'zh-Hans', 'zh-Hant']
+BATCH_SIZE = 4000
+SEPARATOR = "||"
+# Global variable for untranslated state
+add_extraction_state = False
 
 openCC = OpenCC('s2t')
 
 # Global variables
 is_info_plist = False
-LANGUAGE_IDENTIFIERS = ['en', 'zh-Hans', 'zh-Hant']#, 'ja', 'ko', 'ar', 'de', 'es', 'fr', 'ja', 'ko', 'pt-PT', 'ru', 'tr']
-BATCH_SIZE = 4000
-SEPARATOR = "||"
-APPCATEGORY = ""
 
 def exponential_backoff(retry_count, base_delay=1, max_delay=60):
     exponential_delay = min(base_delay * (2 ** retry_count), max_delay)
@@ -173,7 +171,7 @@ def is_info_plist(file_path):
 
 def main():
     try:
-    # Get all the keys of strings
+        # Get all keys of strings from file path provided in config
         with open(json_path, "r", encoding="utf-8") as f:
             json_data = json.load(f)
     except Exception as e:
@@ -184,18 +182,11 @@ def main():
     clear()
     
     if not APPCATEGORY:
-        print(f"Begin the localization process at path: \n{json_path}")
+        print(f"Begin the localization process at path:\n{json_path}")
     else:
-        print(f"Begin the localization process for the app categorized as a {APPCATEGORY} at path: \n{json_path}")
+        print(f"Begin the localization process for the app categorized as a {APPCATEGORY} at path:\n{json_path}")
 
-    global LANGUAGE_IDENTIFIERS
-    # Get language identifiers from the user
-    language_input = input("Enter the language codes to translate into (comma-separated), e.g., 'en, zh-Hans, zh-Hant' (default is ['en', 'zh-Hans', 'zh-Hant']):\n").strip()
-    if language_input:
-        LANGUAGE_IDENTIFIERS = [lang.strip() for lang in language_input.split(',')]
-    else:
-        print("No languages entered. Using default languages ['en', 'zh-Hans', 'zh-Hant'].")
-        LANGUAGE_IDENTIFIERS = ['en', 'zh-Hans', 'zh-Hant']
+    # Use LANGUAGE_IDENTIFIERS from config (skip interactive prompt)
 
     global is_info_plist
     is_info_plist_file = is_info_plist(json_path)
@@ -203,47 +194,37 @@ def main():
     strings_needing_english = []
     source_language = json_data["sourceLanguage"]
 
-    mark_untranslated_manual = input("Do you want to mark untranslated parts as 'extractionState': 'manual'? (y/n, default is 'n'):\n").strip().lower()
-    if mark_untranslated_manual == 'y':
-        add_extraction_state = True
-    else:
-        add_extraction_state = False
+    # Removed interactive untranslated state prompt; using global add_extraction_state from config
+    # mark_untranslated_manual input has been replaced by config value in __main__
 
     for key, strings in json_data["strings"].items():
         if "comment" in strings and "ignore xcstrings" in strings["comment"] or \
-            ("shouldTranslate" in strings and strings["shouldTranslate"] == False):
+           ("shouldTranslate" in strings and strings["shouldTranslate"] == False):
             continue
         if not strings:
             if add_extraction_state:
                 strings = {"extractionState": "manual", "localizations": {}}
             else:
                 strings = {"localizations": {}}
-
         if "localizations" not in strings:
             strings["localizations"] = {}
-
         json_data["strings"][key] = strings
-
         localizations = strings["localizations"]
         
         if is_info_plist_file:
-            # if key == "CFBundleName":
-            #     continue
-            # else:
-                if source_language not in localizations:
-                    print(f"Error: Source language '{source_language}' not found in InfoPlist.xcstrings")
-                    return
+            if source_language not in localizations:
+                print(f"Error: Source language '{source_language}' not found in InfoPlist.xcstrings")
+                return
+            else:
+                if source_language == "zh-Hans":
+                    source_string = localizations[source_language]["stringUnit"]["value"]
                 else:
-                    if source_language == "zh-Hans":
-                        source_string = localizations[source_language]["stringUnit"]["value"]
-                    else:
-                        source_string = (
-                            localizations["en"]["stringUnit"]["value"]
-                            if "en" in localizations
-                            else key
-                        )
-                    
-                strings_needing_english.append((key, source_string))
+                    source_string = (
+                        localizations["en"]["stringUnit"]["value"]
+                        if "en" in localizations
+                        else key
+                    )
+            strings_needing_english.append((key, source_string))
         else:
             if "en" in localizations:
                 source_string = localizations["en"]["stringUnit"]["value"]
@@ -329,14 +310,41 @@ def main():
         json.dump(json_data, ensure_ascii=False, fp=f, indent=4)
 
 if __name__ == "__main__":
-    # Input json_path from terminal
-    json_path = input("Enter the string Catalog (.xcstrings) file path:\n").strip(' "\'')
-    json_path = json_path.replace('\\ ', ' ')
-    # 检查文件是否存在
+    # Expect a config file path as the first CLI argument
+    if len(sys.argv) < 2:
+        print("Usage: python xcstrings_Gemini.py <config_file_path>")
+        sys.exit(1)
+    config_path = sys.argv[1]
+    try:
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config = {}
+            for line in config_file:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    config[key.strip()] = value.strip()
+    except Exception as e:
+        print(f"Error reading config file: {e}")
+        sys.exit(1)
+    
+    # Set global variables from config
+    GOOGLE_API_KEY = config.get("gemini_api_key", "")
+    if not GOOGLE_API_KEY:
+        raise ValueError("gemini_api_key not provided in the config file.")
+    APPCATEGORY = config.get("app_category", "")
+    LANGUAGE_IDENTIFIERS = [lang.strip() for lang in config.get("language_codes", "en,zh-Hans,zh-Hant").split(",")]
+    json_path = config.get("xcstrings_file_path", "")
+    if not json_path:
+        raise ValueError("xcstrings_file_path not provided in the config file.")
+    if config.get("untranslated_state", "0").strip() == "1":
+        add_extraction_state = True
+    else:
+        add_extraction_state = False
+
     if os.path.exists(json_path):
         print(f"File found at: {json_path}")
-        # 继续处理文件
-        APPCATEGORY = input("Enter the app category or name for precise Gemini translations:\n").strip(' "\'')
         main()
     else:
         print(f"Error: No such file or directory: '{json_path}'")
