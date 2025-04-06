@@ -8,19 +8,15 @@ from collections import defaultdict
 import requests
 import random
 import sys
-# pip install opencc-python-reimplemented
-from opencc import OpenCC 
 
 # Global configuration variables
 GOOGLE_API_KEY = ''
 APPCATEGORY = ""
-LANGUAGE_IDENTIFIERS = ['en', 'zh-Hans', 'zh-Hant']
+LANGUAGE_IDENTIFIERS = ['zh-Hans', 'zh-Hant']
 BATCH_SIZE = 4000
 SEPARATOR = "||"
 # Global variable for untranslated state
 add_extraction_state = False
-
-openCC = OpenCC('s2t')
 
 # Global variables
 is_info_plist = False
@@ -143,21 +139,6 @@ def process_others_translations(json_data, language, keys, strings_to_translate_
             }
         }
 
-def process_english_translations(json_data, english_strings, strings_needing_english, strings_to_translate):
-    english_translations = translate_batch(english_strings, "en")
-    for (key, original), translated in zip(strings_needing_english, english_translations):
-        print(f"en: {key} ==> {translated}")
-        json_data["strings"][key]["localizations"]["en"] = {
-            "stringUnit": {
-                "state": "translated",
-                "value": translated,
-            }
-        }
-        # Add the English translation to other language queues
-        for language in LANGUAGE_IDENTIFIERS:
-            if language not in ["en", "zh-Hans", "zh-Hant"]:
-                strings_to_translate[(language, key)] = translated
-
 def clear():
     # for windows
     if os.name == 'nt':
@@ -165,9 +146,6 @@ def clear():
     # for mac and linux(here, os.name is 'posix')
     else:
         _ = os.system('clear')
-
-def is_info_plist(file_path):
-    return os.path.basename(file_path).lower() == 'infoplist.xcstrings'
 
 def main():
     try:
@@ -188,10 +166,7 @@ def main():
 
     # Use LANGUAGE_IDENTIFIERS from config (skip interactive prompt)
 
-    global is_info_plist
-    is_info_plist_file = is_info_plist(json_path)
     strings_to_translate = {}
-    strings_needing_english = []
     source_language = json_data["sourceLanguage"]
 
     # Removed interactive untranslated state prompt; using global add_extraction_state from config
@@ -210,73 +185,13 @@ def main():
             strings["localizations"] = {}
         json_data["strings"][key] = strings
         localizations = strings["localizations"]
-        
-        if is_info_plist_file:
-            if source_language not in localizations:
-                print(f"Error: Source language '{source_language}' not found in InfoPlist.xcstrings")
-                return
-            else:
-                if source_language == "zh-Hans":
-                    source_string = localizations[source_language]["stringUnit"]["value"]
-                else:
-                    source_string = (
-                        localizations["en"]["stringUnit"]["value"]
-                        if "en" in localizations
-                        else key
-                    )
-            strings_needing_english.append((key, source_string))
-        else:
-            if "en" in localizations:
-                source_string = localizations["en"]["stringUnit"]["value"]
-            elif source_language == "zh-Hans":
-                source_string = key
-                strings_needing_english.append((key, source_string))
-            else:
-                source_string = localizations[source_language]["stringUnit"]["value"] if source_language in localizations else key
-                strings_needing_english.append((key, source_string))
+        source_string = localizations[source_language]["stringUnit"]["value"] if source_language in localizations else key
         
         for language in LANGUAGE_IDENTIFIERS:
             if language not in localizations or localizations[language]["stringUnit"]["state"] != "translated":
-                if language == source_language:
-                    translated_string = source_string
-                elif source_language == "zh-Hans" and language == "zh-Hant":
-                    translated_string = OpenCC('s2t').convert(source_string)
-                elif language == "en" and source_language != "en":
-                    continue  # We'll handle English translations separately
-                else:
-                    strings_to_translate[(language, key)] = source_string
-                    continue
-
-                localizations[language] = {
-                    "stringUnit": {
-                        "state": "translated",
-                        "value": translated_string,
-                    }
-                }
+                strings_to_translate[(language, key)] = source_string
             else:
                 print(f"{language}: {{{key}: {source_string}}} has been translated")
-
-    # Handle English translations first
-    if strings_needing_english:
-        english_strings = [s[1] for s in strings_needing_english]
-        
-        # Loop through the strings in chunks
-        start_index = 0
-        while start_index < len(english_strings):
-        # Determine the end index for the current chunk
-            combined_string = ""
-            end_index = start_index
-            while end_index < len(english_strings) and len(combined_string + english_strings[end_index] + SEPARATOR) <= BATCH_SIZE:
-                combined_string += english_strings[end_index] + SEPARATOR
-                end_index += 1
-            
-            # Remove the trailing separator
-            combined_string = combined_string.rstrip(SEPARATOR)
-            # Process the current chunk of translations
-            process_english_translations(json_data, english_strings[start_index:end_index], strings_needing_english[start_index:end_index], strings_to_translate)
-            # Update the start index for the next chunk
-            start_index = end_index
-        
 
     # Process any remaining strings for each language
     if strings_to_translate:
