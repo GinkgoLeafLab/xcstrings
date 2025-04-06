@@ -55,10 +55,10 @@ def translate_batch(strings, target_language):
         prompt += f" for the app categorized as a {APPCATEGORY}."
         
     prompt += f"""
-    Each item is separated by {SEPARATOR}. Please keep the same structure in your response.
+    Each item is separated by {SEPARATOR}. Please keep the same structure (Keep the structure such as line breaks) in your response.
 
     <Start>{SEPARATOR.join(strings)}<End>"""
-
+    
     headers = {
         'Content-Type': 'application/json',
     }
@@ -236,7 +236,7 @@ def main():
                 strings_needing_english.append((key, source_string))
         
         for language in LANGUAGE_IDENTIFIERS:
-            if language not in localizations:
+            if language not in localizations or localizations[language]["stringUnit"]["state"] != "translated":
                 if language == source_language:
                     translated_string = source_string
                 elif source_language == "zh-Hans" and language == "zh-Hant":
